@@ -1,25 +1,130 @@
 ---
-title: "Reproducible Research: Peer Assessment 1"
-output: 
-  html_document:
-    keep_md: true
+title: "Reproducible Research: Project 1"
+output: html_document
 ---
 
+## Preparatory steps
 
-## Loading and preprocessing the data
+It is always handy to start with the preparation of your computer for the coming data. We will set the working directory (there is no code for this, please do it yourself), load and activate the necessary packages, prepare a folder, download the file and unzip it, read the names of the included data sets.
 
+``` {r initial settings}
+## LOAD NECESSARY PACKAGES
+## install.packages("ggplot2", "dplyr") 
+## you do not need this step if package is already installed 
+## if you do need to install the packages, then remove the ## in front of the code line 
+library(ggplot2)
+library(dplyr)
+## SET PATH AND FOLDER
+path <- getwd() 
+if(!file.exists("./data")){dir.create("./data")}
+## DOWNLOAD, SAVE AND UNZIP THE FILE; LIST THE NAMES OF THE ZIPPED FILES 
+url <- "https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2Factivity.zip"
+filename <- "OriginalDataSet.zip" 
+download.file(url, file.path(path, "data", filename)) 
+unzip(file.path(path, "data", filename), exdir = file.path(path, "data")) 
+inputpath <- file.path(path, "data")
+list.files(inputpath, recursive = TRUE) 
+```
 
+Then follows the loading of the data set in R. With three R functions we get acquainted with the data set and the next three functions preprocess the data set. I would like to see the dates in a date variable and for future manipulations (when analysing the missing values) I need two new variables. They indicate the increase in time (dates and intervals). 
 
-## What is mean total number of steps taken per day?
+```{r load and preproccess}
+## LOADING AND PREPROCESSING THE DATA
+dt <- read.csv(file.path(path, "data", "activity.csv")) 
+head(dt)
+tail(dt)
+str(dt) 
+dt$date <- as.Date(dt$date)
+dt$dateIndex <- rep(1:61, each = 288)
+dt$intervalIndex <- rep(1:288, 61)
+```
 
+## Mean total steps taken per day 
 
+```{r mean total steps per day}
+## WHAT IS MEAN TOTAL NUMBER OF STEPS TAKEN PER DAY?
+totsteps_day <- summarise(group_by(dt, date), total = sum(steps, na.rm = TRUE), 
+                          dateIndex = mean(dateIndex)) 
+hist(totsteps_day$total, 
+     main = "Histogram of the total number of steps taken each day", 
+     xlab = "Total steps per day") 
+mean <- mean(totsteps_day$total, na.rm = TRUE)
+median <- median(totsteps_day$total, na.rm = TRUE)
+```
 
-## What is the average daily activity pattern?
+The mean and the median of the total number of steps taken per day are, respectively, `r mean` and `r median`. 
 
+## Average daily activity pattern
 
+The time-series plot of the 5-minute interval and the average number of steps taken clearly shows when the person sleeps - the mean steps are close to zero. Or at least this was my initial interpretation. Each day is associated with 288 intervals of 5 minutes and this makes 39.25 hours per day, which is nonsense. This discouraged me from making sense out of the results. 
 
-## Imputing missing values
+```{r mean steps per interval}
+## WHAT IS THE AVERAGE DAILY ACTIVITY PATTERN? 
+num_intervals <- length(dt$interval)/length(unique(dt$date))
+avgsteps_interval <- summarise(group_by(dt, interval), average = mean(steps, 
+                            na.rm = TRUE), intervalIndex = mean(intervalIndex)) 
+str(avgsteps_interval) 
+with(avgsteps_interval, plot(interval, average, type = "l", 
+    main = "Average number of steps taken per time interval, \n averaged across all days", 
+                             xlab = "Interval", ylab = "Mean steps")) 
+int_max_avg_steps <- filter(avgsteps_interval, average == max(average))
+int_max_avg_steps$interval
+```
 
+The 5-minute interval with the number `r int_max_avg_steps$interval` contains the maximum number of steps. They are `r int_max_avg_steps$average`. 
 
+## Imputing missing values 
 
-## Are there differences in activity patterns between weekdays and weekends?
+My strategy for choosing whether to use the mean for the day or the mean for the 5-minute interval for imputational purposes was to use the help of a regression. I know about regressions and how to run them in R from previously taken courses. The idea is to check if the number of steps is influenced by the day or the interval. The second hypothesis fails to be rejected and so as the number of the interval increases, the number of steps does too. Therefore a time interval with missing data with ID number 666 needs to be imputed with the average steps from all other intervals with ID number 666. This is what the code below does. 
+
+```{r missing values}
+## IMPUTING MISSING VALUES 
+num_missing <- sum(is.na(dt)) 
+percent_missing <- num_missing/length(dt$steps)*100
+pattern_steps <- lm(steps ~ dateIndex + intervalIndex, data = dt, 
+                    subset = !is.na(steps))
+summary(pattern_steps) 
+dtImp <- dt
+dtTemp <- merge(dt, avgsteps_interval, by = "intervalIndex")
+dtTemp <- arrange(dtTemp, dateIndex)
+dtImp$steps[is.na(dtImp$steps)] <- dtTemp$average[is.na(dtTemp$steps)]
+## the next 2 lines are just to make sure I did a correct imputation; for day 1 we need imputation and for day 2 we do not
+head(dtImp$steps[dt$dateIndex == 1])
+head(dtImp$steps[dt$dateIndex == 2])
+totsteps_dayImp <- summarise(group_by(dtImp, date), total = sum(steps), 
+                             dateIndex = mean(dateIndex)) 
+hist(totsteps_dayImp$total, 
+     main = "Histogram of the total number of steps taken each day \n (missing values imputed)", 
+     xlab = "Total steps per day") 
+meanImp <- mean(totsteps_dayImp$total)
+medianImp <- median(totsteps_dayImp$total)
+```
+
+The total number of missing values in the data set is `r num_missing` but it is also important to see this as a percentage and so we know that the missing values are only `r percent_missing` %. This is bearable. Of course, the analysis of missing values includes checking for randomness but I will not dwell on the subject in this course. 
+The new mean and median steps per day are, respectively, `r meanImp` and `r medianImp`. The effect of the imputation cannot be others but to increase the values since the imputed values are non-negative. 
+
+## Activity patterns between weekdays and weekends
+
+My R produces the names of the weekdays in Bulgarian so I had to do some additional coding to crack the link between names and numeric codes and then to force R to work with numeric codes and not with names. (Because I am not sure Cyrillic alphabet will work well on other computers.)
+
+```{r weekdays vs weekends}
+## ARE THERE DIFFERENCES IN ACTIVITY PATTERNS BETWEEN WEEKDAYS AND WEEKENDS?
+dtImp$weekdays <- as.factor(weekdays(dtImp$date))
+levels(dtImp$weekdays)
+## Sunday in Bulgarian is coded as 2 and Saturday in Bulgarian is coded as 6
+dtImp$weekdays <- as.numeric(as.factor(weekdays(dtImp$date)))
+for (i in 1:length(dtImp$steps)) {
+  if (dtImp$weekdays[i] == 2 | dtImp$weekdays[i] == 6) {
+    dtImp$weekday[i] <- 1} else {
+      dtImp$weekday[i] <- 0}
+} 
+dtImp$weekday <- factor(dtImp$weekday, levels = c(0,1), labels = c("weekday", "weekend")) 
+avgsteps_int_WD <- summarise(group_by(dtImp, weekday, interval), average = mean(steps))
+View(avgsteps_int_WD)
+g <- ggplot(avgsteps_int_WD, aes(interval, average))
+g + geom_line(stat = "identity") + facet_grid(. ~ weekday) + 
+  labs(title = "Average number of steps taken per time interval, averaged across all days") + 
+  labs(x = 'Interval', y = "Mean steps")
+```
+
+There is a difference in the mean number of steps during working days and during weekends. During working days there is a high peak short after the "sleeping" period. I suppose this person goes to work by foot. And returns to home by some other means of transportation because we do not see the same peak a second time. During weekends he/she wakes up at different times and therefore we do not see the same sharp, vertical increase after interval 500 but a slanting and volatile curve. 
